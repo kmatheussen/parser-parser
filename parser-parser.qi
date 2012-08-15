@@ -1,0 +1,208 @@
+\
+
+Copyright 2011 Kjetil S. Matheussen
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA. 
+
+\
+
+
+(set *parser-fail-value* (gensym "parser-fail"))
+(define parser-fail
+  -> (value *parser-fail-value*))
+
+
+(define parser-get-name
+  A -> (let S   (symbol->string A)
+            Pos (SEARCH "/" S)
+            (if (or (= Pos [])
+                    (is-lower-alpha? (head (explode A))))
+                A
+                (let Name (SUBSEQ S 0 Pos)
+                  (if (or (= "P" Name)
+                          (= "Peak" Name))
+                      (error "A matcher name can not be named P or Peak")
+                      (string->symbol Name))))))
+
+(define parser-get-matcher
+  A -> (let S   (symbol->string A)
+            Pos (SEARCH "/" S)
+            (if (or (= Pos [])
+                    (is-lower-alpha? (head (explode A))))
+                A
+                (string->symbol (SUBSEQ S (1+ Pos))))))
+
+\
+(track parser-get-matcher)
+(untrack parser-get-name)
+(parser-get-name P/<expr>)
+(parser-get-matcher Size/<expr>)
+(parser-get-matcher <expr>)
+(parser-get-name Size/<expr>)
+(parser-get-name <expr>)
+\
+
+(define parser-is-parser-call?
+  Matcher -> (and (or (variable? Matcher)
+                      (symbol? Matcher))
+                  (let Matcher (parser-get-matcher Matcher)
+                       Els     (explode Matcher)
+                       (and (= #\< (head Els))
+                            (= #\> (last Els))))))
+
+\
+(parser-is-parser-call? <abc)
+(parser-is-parser-call? <abc>)
+(parser-is-parser-call? abc>)
+(parser-is-parser-call? Size/<expr>)
+(parser-is-parser-call? Size/expr>)
+(parser-rule [V/<var>] [list V])
+\
+
+
+
+(define parser-rule
+  []       Semantic -> (let Semantics-try (gensym "Semantics-try")
+                         [let Semantics-try Semantic
+                           [if [not [= #\Escape Semantics-try]]
+                               [@p P Semantics-try]
+                               #\Escape]])
+
+  [<e>|_ ] Semantic -> (parser-rule [] Semantic)
+
+  [-*-|Ms] Semantic -> [let -*- [Peak P]  \ A 'let' with more than 3 arguments doesn't work with Qi macros (SBCL). \
+                         [let P [1+ P]
+                           (parser-rule Ms Semantic)]]
+
+  [M  |Ms] Semantic -> (let Matcher (parser-get-matcher M)
+                            Name (parser-get-name M)
+                            Temp (gensym "Temp")
+                            [let Temp [Matcher Peak P]
+                              [if [= #\Escape Temp]
+                                  #\Escape
+                                  [let P [fst Temp]
+                                    [let Name [snd Temp]
+                                      (parser-rule Ms Semantic)]]]]) where (parser-is-parser-call? M)
+
+
+  [M  |Ms] Semantic -> [if [= [Peak P] M]
+                           [let P [1+ P]
+                             (parser-rule Ms Semantic)]
+                           #\Escape])
+                       
+\
+(parser-rule [-*-] [1+ -*-])
+(parser-rule [","] 50)
+(parser-rule [<e>] [])
+(parser-rule [<var>] [<var>])
+(parser-rule [V/<var>] [V])
+(parser-rule [<var> "," <var-list>] [<var> | <var-list>])
+\
+
+(define parser-rules
+  []                            -> #\Escape
+  [[Matchers Semantic] | Rules] -> (let Rule-try (gensym "Rule-try")
+                                     [let Rule-try (parser-rule Matchers Semantic)
+                                       [if [= #\Escape Rule-try]
+                                           (parser-rules Rules)
+                                           Rule-try]]))
+
+\
+(PPRINT (parser-rules [[[-*-] [1+ -*-]]
+                       [[","] 50]]))
+\
+
+(define organize-parser-elements
+  []        []                   -> []
+  This-rule [;           | Rest] -> [[This-rule (last This-rule)] | (organize-parser-elements [] Rest)]
+  This-rule [:= Semantic | Rest] -> [[This-rule Semantic        ] | (organize-parser-elements [] Rest)]
+  This-rule [A           | Rest] -> (organize-parser-elements (append This-rule [A]) Rest))
+
+\
+(track organize-parser-elements)
+(organize-parser-elements [] [<a>;])
+(organize-parser-elements [] [<a> <b>;])
+(organize-parser-elements [] [<a>; <b> <c>;])
+
+(organize-parser-elements []
+                          [-*-       := [1+ -*-]
+                           "," <var> := [<var> 90]])
+(parser-rules (organize-parser-elements []
+                                        [-*-       := [1+ -*-]
+                                         "," <var> := [<var> 90]]))
+\
+
+(define parser-parser
+  Parser-name Rules -> (let Main-try (gensym "Main-try")
+                         [define Parser-name
+                           Peak P -> [let Main-try (parser-rules (organize-parser-elements [] Rules))
+                                       [if [or [= #\Escape Main-try]
+                                               [= (parser-fail) [snd Main-try]]]
+                                           #\Escape
+                                           Main-try]]]))
+
+\
+(PPRINT (parser-parser <strange> [-*- := [1+ -*-] "," <var> := [list <var> 90]]))
+(parser-parser <strange> [-*- := [1+ -*-] "," <var> := [cons <var> [cons 90 []]]])
+(parser-parser <var-list>
+               [<var> "," <var-list> := [cons <var> | <var-list>]
+                <var>                := [list <var>]
+                <e>                  := [list]])
+(organize-parser-elements []
+                          [<var> "," <var-list> := [cons <var> | <var-list>]
+                           <var>                := [list <var>]
+                           <e>                  := [list]])
+\
+
+
+(define parser-parser-macro
+  [parser Parser-name | Rules] -> (parser-parser Parser-name Rules)
+  A -> A)
+
+(sugar in parser-parser-macro 1)
+
+
+(define parser-compile
+  Func Input -> (Func (/. X (if (> X (length Input))
+                                #\Escape
+                                (nth X Input)))
+                      1))
+                          
+
+\
+(parser <strange>
+   "a" -*- := (1+ 50)
+   "," <var> := [<var> 90])
+
+(ps <strange>)
+
+(define peak
+  P -> (nth P ["(" "int" "int2" "anint" "," "float" "afloat" "," "anunknown" ")"]))
+
+(<strange> peak 1)
+(parser-compile <strange> ["(" "int" "int2" "anint" "," "float" "afloat" "," "anunknown" ")"])
+
+(parser <strange2>
+        (+ 2 3) := 6)
+
+(parser-parser <strange2> [[+ 2 3] := 6])
+
+(parser-parser <strange3> [<a> := 7])
+
+(ps <strange2>)
+
+(ps <name>)
+
+\
