@@ -83,7 +83,7 @@ SHORT MANUAL
        "c" := 3;)
 
     (parser <a>
-       "a: := 1
+       "a" := 1
        "b";
        "c" := 3)
 
